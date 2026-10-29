@@ -31,13 +31,19 @@ function shade(u, v) {
   return bg;
 }
 
+// The Chrome Web Store wants 128px icons drawn at 96x96 with 16px of transparent padding.
+// The small toolbar sizes use the whole canvas.
+const PADDING = { 128: 16 };
+
 for (const size of [16, 32, 48, 128]) {
   const ss = 6;
+  const pad = PADDING[size] || 0;
+  const art = size - pad * 2;
   const png = encodePng(size, size, (x, y) => {
     let r = 0, g = 0, b = 0, n = 0;
     for (let sy = 0; sy < ss; sy++) {
       for (let sx = 0; sx < ss; sx++) {
-        const c = shade((x + (sx + 0.5) / ss) / size, (y + (sy + 0.5) / ss) / size);
+        const c = shade((x - pad + (sx + 0.5) / ss) / art, (y - pad + (sy + 0.5) / ss) / art);
         if (c) { r += c[0]; g += c[1]; b += c[2]; n++; }
       }
     }

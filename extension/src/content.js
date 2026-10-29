@@ -1,4 +1,4 @@
-// GitHub Image Viewer: intercepts clicks on images in rendered markdown
+// Image Viewer for GitHub: intercepts clicks on images in rendered markdown
 // (PR/issue bodies, comments, READMEs) and shows them in an in-page viewer.
 (() => {
   'use strict';
@@ -33,12 +33,18 @@
 
   // Does a link around an image point at the image itself (as GitHub's
   // markdown renderer does), rather than somewhere else (badges, CI links)?
+  // GitHub hosts the viewer may load a linked original from. Kept in step with the
+  // manifest's host_permissions, so that what's shown can also be copied.
+  const ORIGINAL_HOSTS = /^(github\.com|(raw|private-user-images|user-images|media|gist)\.githubusercontent\.com)$/;
+  // GitHub's attachment links: github.com/user-attachments/assets/<id> or /<owner>/<repo>/assets/<id>.
+  const isAttachment = (u) => u.hostname === 'github.com' && /^\/(user-attachments|[^/]+\/[^/]+)\/assets\//.test(u.pathname);
+
   function isImageLink(href, img) {
     const u = parseUrl(href);
     if (!u) return false;
     if ([img.currentSrc, img.src, img.dataset.canonicalSrc].includes(u.href)) return true;
     if (/(^|\.)githubusercontent\.com$/.test(u.hostname)) return true;
-    if (u.hostname === 'github.com' && /^\/(user-attachments|[^/]+\/[^/]+)\/assets\//.test(u.pathname)) return true;
+    if (isAttachment(u)) return true;
     return IMAGE_EXT.test(u.pathname);
   }
 
@@ -144,18 +150,32 @@
     return '#ffffff';
   }
 
+  // Should the viewer show the linked file instead of the <img>? Only when the link is
+  // a different raw file on GitHub, e.g. a README thumbnail linking to the full-size
+  // image. Attachment links are the same picture as the <img> under another URL, and
+  // going straight to an external URL would skip GitHub's camo image proxy.
+  function isLargerOriginal(full, src) {
+    const f = parseUrl(full);
+    const s = parseUrl(src);
+    if (!f || !s || f.origin + f.pathname === s.origin + s.pathname) return false;
+    return f.protocol === 'https:' && ORIGINAL_HOSTS.test(f.hostname) && !isAttachment(f);
+  }
+
   function toItem(img) {
     const src = img.currentSrc || img.src;
     let full = src;
     const a = img.closest('a[href]');
-    if (a && isImageLink(a.href, img)) {
-      const u = parseUrl(a.href);
-      // /blob/ links go to the HTML file page; the <img> already points at the raw file.
-      if (!(u.hostname === location.hostname && u.pathname.includes('/blob/'))) full = u.href;
+    const u = a && parseUrl(a.href);
+    // Plain-http originals are skipped: the page's own (https) image is used instead.
+    if (u?.protocol === 'https:' && isImageLink(a.href, img)) {
+      // /blob/ links go to the HTML file page; /raw/ serves the file itself.
+      if (u.hostname === location.hostname) u.pathname = u.pathname.replace(/^(\/[^/]+\/[^/]+)\/blob\//, '$1/raw/');
+      full = u.href;
     }
     return {
       el: img,
       src,
+      view: isLargerOriginal(full, src) ? full : src,
       full,
       caption: captionFor(img),
       author: authorFor(img),
@@ -372,10 +392,30 @@
     .toast.show { opacity: 1; transform: translate(-50%, 0); }
     .root.single .toast { bottom: 28px; }
 
+    .root.asking .bar, .root.asking .main, .root.asking .strip { visibility: hidden; }
+    .consent { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; }
+    .consent-card {
+      width: min(440px, calc(100vw - 32px)); background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+      padding: 22px 24px 20px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    }
+    .consent-card h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; color: #fff; }
+    .consent-card p { margin: 0 0 10px; color: #c9d1d9; }
+    .consent-card a { color: #4493f8; }
+    .consent-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    .consent-actions button {
+      border: 1px solid rgba(240, 246, 252, 0.2); background: rgba(240, 246, 252, 0.06); color: #e6edf3;
+      border-radius: 6px; padding: 6px 14px; cursor: pointer; font-weight: 500;
+    }
+    .consent-actions button:hover { background: rgba(240, 246, 252, 0.12); }
+    .consent-actions .primary { background: #238636; border-color: rgba(240, 246, 252, 0.1); color: #fff; }
+    .consent-actions .primary:hover { background: #2ea043; }
+    .consent-actions button:focus-visible { outline: 2px solid #4493f8; outline-offset: 2px; }
+
     .help { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; background: rgba(1, 4, 9, 0.6); }
     .help-card {
       background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 20px 24px 22px;
-      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: auto;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); max-width: calc(100vw - 32px); max-height: calc(100vh - 32px);
+      overflow: auto; overscroll-behavior: contain;
     }
     .help-card h2 { margin: 0 0 14px; font-size: 14px; font-weight: 600; color: #fff; }
     .help-card dl { display: grid; grid-template-columns: auto 1fr; gap: 10px 20px; margin: 0; align-items: center; }
@@ -446,6 +486,20 @@
       </div>
       <nav class="strip" aria-label="All images"></nav>
       <div class="toast" role="status" aria-live="polite"></div>
+      <div class="consent" role="alertdialog" aria-labelledby="giv-consent-title" aria-describedby="giv-consent-text" hidden>
+        <div class="consent-card">
+          <h2 id="giv-consent-title">Open GitHub images right here</h2>
+          <div id="giv-consent-text">
+            <p>To show them in this viewer, Image Viewer for GitHub reads the images in a page's comments and READMEs, their captions, and the usernames of the people who posted them.</p>
+            <p>This stays in your browser and is never sent to the developer. The only requests made are for the images themselves, from where they're hosted (normally GitHub), just as the page does.
+              <a href="https://github.com/AyushKaithwas/github-image-viewer/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Privacy policy</a></p>
+          </div>
+          <div class="consent-actions">
+            <button data-action="consentNo">Not now</button>
+            <button class="primary" data-action="consentYes">Continue</button>
+          </div>
+        </div>
+      </div>
       <div class="help" hidden>
         <div class="help-card">
           <h2>Keyboard shortcuts</h2>
@@ -464,9 +518,14 @@
   let ui = null; // DOM references, built on first open
   let isOpen = false;
   let helpOpen = false;
+  let helpReturn = null; // focused button before the help overlay opened
   let closeTimer = 0;
   let toastTimer = 0;
   let savedScroll = null;
+  let opener = null; // focused element before opening, refocused on close
+  // The user agrees once, in the viewer, before it reads anything from a page.
+  let consented = false;
+  let asking = null; // the clicked image while the consent card is up
   const S = { items: [], index: 0, nat: { w: 0, h: 0 }, scale: 1, x: 0, y: 0, rot: 0, fitted: true, loaded: false, token: 0 };
 
   function build() {
@@ -501,6 +560,7 @@
       strip: $('.strip'),
       toast: $('.toast'),
       help: $('.help'),
+      consent: $('.consent'),
     };
 
     ui.root.addEventListener('click', (e) => {
@@ -514,7 +574,7 @@
       if (e.target === ui.help) toggleHelp(false);
     });
     ui.root.addEventListener('wheel', (e) => {
-      if (!e.target.closest('.strip')) e.preventDefault();
+      if (!e.target.closest('.strip, .help-card')) e.preventDefault();
     }, { passive: false });
     ui.strip.addEventListener('wheel', (e) => {
       // Let a vertical mouse wheel scroll the thumbnail strip sideways.
@@ -589,11 +649,13 @@
     apply(animate);
   }
 
+  const clampScale = (s, f = fitScale()) => clamp(s, Math.min(f, 1) * 0.5, Math.max(10, f * 10));
+
   // (px, py) is the point to keep still, relative to the stage centre.
   function zoomTo(next, px = 0, py = 0, animate = false) {
     if (!S.loaded) return;
     const f = fitScale();
-    next = clamp(next, Math.min(f, 1) * 0.5, Math.max(10, f * 10));
+    next = clampScale(next, f);
     const k = next / S.scale;
     S.x = px - (px - S.x) * k;
     S.y = py - (py - S.y) * k;
@@ -628,11 +690,15 @@
 
     stage.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
+      // Leave buttons on the stage (the error state's "Open original") alone:
+      // capturing the pointer would retarget their click to the stage.
+      if (e.target.closest('button')) return;
       stage.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
-        pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, scale: S.scale };
+        const [mx, my] = stagePoint((a.x + b.x) / 2, (a.y + b.y) / 2);
+        pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, scale: S.scale, x: S.x, y: S.y, mx, my };
         drag = null;
         stage.classList.remove('panning');
         return;
@@ -658,9 +724,20 @@
       p.x = e.clientX;
       p.y = e.clientY;
       if (pinch && pointers.size >= 2) {
+        if (!S.loaded) return;
+        // Keep the image point that started under the fingers' midpoint under it,
+        // so the image follows the fingers as they spread and move.
         const [a, b] = [...pointers.values()];
-        const [px, py] = stagePoint((a.x + b.x) / 2, (a.y + b.y) / 2);
-        zoomTo((pinch.scale * Math.hypot(a.x - b.x, a.y - b.y)) / pinch.dist, px, py);
+        const [mx, my] = stagePoint((a.x + b.x) / 2, (a.y + b.y) / 2);
+        const f = fitScale();
+        const next = clampScale((pinch.scale * Math.hypot(a.x - b.x, a.y - b.y)) / pinch.dist, f);
+        const k = next / pinch.scale;
+        S.x = mx - (pinch.mx - pinch.x) * k;
+        S.y = my - (pinch.my - pinch.y) * k;
+        S.scale = next;
+        S.fitted = Math.abs(next - f) < 0.001;
+        clampPan();
+        apply(false);
         return;
       }
       if (!drag || drag.id !== e.pointerId || !S.loaded) return;
@@ -789,9 +866,11 @@
 
     const { img, spinner, error } = ui;
     error.hidden = true;
+    spinner.hidden = true;
     let dims = null;
+    let src = item.view;
     const el = item.el;
-    if (el.isConnected && el.complete && el.naturalWidth && (el.currentSrc || el.src) === item.src) {
+    if (el.isConnected && el.complete && el.naturalWidth && (el.currentSrc || el.src) === src) {
       dims = { w: el.naturalWidth, h: el.naturalHeight };
     } else {
       S.loaded = false;
@@ -801,7 +880,12 @@
         if (token === S.token) spinner.hidden = false;
       }, 120);
       try {
-        dims = await loadImage(item.src);
+        dims = await loadImage(src).catch((err) => {
+          if (src === item.src || token !== S.token) throw err;
+          // The linked original failed: show (and copy) what the page showed.
+          src = item.view = item.src;
+          return loadImage(src);
+        });
       } catch {
         if (token !== S.token) return;
         clearTimeout(spin);
@@ -817,7 +901,7 @@
 
     S.nat = dims;
     S.loaded = true;
-    img.src = item.src;
+    img.src = src;
     img.alt = item.caption;
     img.style.backgroundColor = item.bg;
     img.classList.remove('fade-out', 'enter');
@@ -837,7 +921,7 @@
     }
 
     for (const n of [index + 1, index - 1]) {
-      if (S.items[n]) new Image().src = S.items[n].src;
+      if (S.items[n]) new Image().src = S.items[n].view;
     }
   }
 
@@ -900,6 +984,7 @@
   // ---------------------------------------------------------------------------
 
   function lockScroll() {
+    if (savedScroll) return; // still locked from a close that hasn't finished
     const de = document.documentElement;
     savedScroll = { overflow: de.style.overflow, paddingRight: de.style.paddingRight };
     const scrollbar = innerWidth - de.clientWidth;
@@ -918,7 +1003,10 @@
   function open(items, index) {
     build();
     clearTimeout(closeTimer);
-    if (!isOpen) lockScroll();
+    if (!isOpen) {
+      lockScroll();
+      opener ??= document.activeElement;
+    }
     isOpen = true;
     S.items = items;
     ui.host.style.display = 'block';
@@ -946,6 +1034,8 @@
     }
     if (!flew) ui.img.classList.add('fade-out');
     ui.root.classList.remove('open');
+    if (opener?.isConnected && opener !== document.body) opener.focus({ preventScroll: true });
+    opener = null;
     closeTimer = setTimeout(() => {
       ui.host.style.display = 'none';
       ui.img.hidden = true;
@@ -970,8 +1060,17 @@
 
   function toggleHelp(force) {
     if (!ui) return;
+    const was = helpOpen;
     helpOpen = force ?? !helpOpen;
     ui.help.hidden = !helpOpen;
+    // Take focus off the button under the overlay, and give it back afterwards.
+    if (helpOpen && !was) {
+      helpReturn = ui.shadow.activeElement;
+      ui.root.focus({ preventScroll: true });
+    } else if (!helpOpen && was) {
+      if (isOpen) (helpReturn?.isConnected ? helpReturn : ui.root).focus({ preventScroll: true });
+      helpReturn = null;
+    }
   }
 
   const current = () => S.items[S.index];
@@ -1010,7 +1109,7 @@
     toast(`Downloading ${items.length} images…`, 4000);
     try {
       const res = await send({ type: 'giv:download-many', items });
-      toast(res?.ok ? `Saved ${res.count} of ${res.total} to Downloads/${folder}` : 'Download failed', 3500);
+      toast(res?.ok ? `Downloading ${res.count} of ${res.total} to Downloads/${folder}` : 'Download failed', 3500);
     } catch {
       toast('Extension was updated, reload the page to download');
     }
@@ -1018,19 +1117,34 @@
 
   async function fetchBlob(item) {
     if (hasRuntime()) {
-      const res = await send({ type: 'giv:fetch', urls: [...new Set([item.src, item.full])] });
+      const res = await send({ type: 'giv:fetch', urls: [...new Set([item.view, item.src, item.full])] });
       if (!res?.ok) throw new Error(res?.error || 'fetch failed');
       return base64ToBlob(res.data, res.type);
     }
-    const res = await fetch(item.src);
+    const res = await fetch(item.view);
     return res.blob();
   }
 
   async function toPng(blob) {
     if (blob.type === 'image/png') return blob;
-    const bitmap = await createImageBitmap(blob);
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    let source;
+    if (blob.type === 'image/svg+xml') {
+      // createImageBitmap can't decode SVG, but an <img> can.
+      const url = URL.createObjectURL(blob);
+      try {
+        source = new Image();
+        source.src = url;
+        await source.decode();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } else {
+      source = await createImageBitmap(blob);
+    }
+    const w = source.naturalWidth || source.width || S.nat.w;
+    const h = source.naturalHeight || source.height || S.nat.h;
+    const canvas = new OffscreenCanvas(w, h);
+    canvas.getContext('2d').drawImage(source, 0, 0, w, h);
     return canvas.convertToBlob({ type: 'image/png' });
   }
 
@@ -1045,7 +1159,7 @@
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
       toast('Image copied');
     } catch (err) {
-      console.warn('[GitHub Image Viewer] copy failed', err);
+      console.warn('[Image Viewer for GitHub] copy failed', err);
       toast("Couldn't copy this image");
     }
   }
@@ -1093,9 +1207,32 @@
     downloadAll,
     fullscreen: toggleFullscreen,
     help: () => toggleHelp(),
+    consentYes: acceptConsent,
+    consentNo: declineConsent,
   };
 
+  // Keep Tab inside the viewer: the page behind it is covered, and typing into a
+  // GitHub field there would trigger the viewer's shortcuts.
+  function moveFocus(dir) {
+    const buttons = helpOpen
+      ? []
+      : [...ui.shadow.querySelectorAll('button, a[href]')].filter((b) => !b.disabled && b.checkVisibility({ visibilityProperty: true }));
+    if (!buttons.length) return ui.root.focus();
+    const i = buttons.indexOf(ui.shadow.activeElement);
+    const next = i < 0 ? (dir > 0 ? 0 : buttons.length - 1) : (i + dir + buttons.length) % buttons.length;
+    buttons[next].focus();
+  }
+
   function onKeyDown(e) {
+    if (asking) {
+      e.stopImmediatePropagation();
+      if (e.key === 'Escape') declineConsent();
+      else if (e.key === 'Tab') moveFocus(e.shiftKey ? -1 : 1);
+      // Enter and Space press the focused button; browser shortcuts still work.
+      else if (e.key === 'Enter' || e.key === ' ' || e.metaKey || e.ctrlKey) return;
+      e.preventDefault();
+      return;
+    }
     if (!isOpen) return;
     // Keep GitHub's own hotkeys (t, s, /, g i …) from firing behind the viewer.
     e.stopImmediatePropagation();
@@ -1117,9 +1254,15 @@
       return;
     }
     if (e.metaKey || e.ctrlKey) return;
-    if (helpOpen && (e.key === 'Escape' || e.key === '?')) {
+    if (e.key === 'Tab') {
       e.preventDefault();
-      toggleHelp(false);
+      moveFocus(e.shiftKey ? -1 : 1);
+      return;
+    }
+    if (helpOpen) {
+      // The overlay is modal too: only its own keys work while it's up.
+      if (e.key === 'Escape' || e.key === '?') toggleHelp(false);
+      e.preventDefault();
       return;
     }
     let handled = true;
@@ -1158,19 +1301,88 @@
 
   function onClick(e) {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const img = e.target instanceof Element ? e.target.closest('img') : null;
+    const target = e.target instanceof Element ? e.target : null;
+    // A click on the image itself, or Enter on the link around it (keyboard users;
+    // detail is 0 for clicks that come from the keyboard rather than a pointer).
+    const link = e.detail === 0 ? target?.closest('a[href]') : null;
+    const img = target?.closest('img') || (link?.querySelectorAll('img').length === 1 ? link.querySelector('img') : null);
     if (!img || !isEligible(img, true)) return;
     e.preventDefault();
     e.stopImmediatePropagation();
+    if (consented) openFrom(img);
+    else askConsent(img);
+  }
+
+  function openFrom(img) {
     const { items, index } = collect(img);
     open(items, index);
   }
 
+  async function askConsent(img) {
+    const at = navigations;
+    try {
+      consented = !!(await chrome.storage.local.get('consented')).consented;
+    } catch {}
+    // The page may have changed while storage was read.
+    if (at !== navigations || !img.isConnected || asking || isOpen) return;
+    if (consented) return openFrom(img);
+    build();
+    clearTimeout(closeTimer);
+    lockScroll();
+    opener = document.activeElement;
+    asking = img;
+    ui.host.style.display = 'block';
+    ui.root.classList.add('asking');
+    ui.consent.hidden = false;
+    void ui.root.offsetWidth;
+    ui.root.classList.add('open');
+    ui.consent.querySelector('.primary').focus();
+  }
+
+  function endAsking() {
+    asking = null;
+    ui.consent.hidden = true;
+    ui.root.classList.remove('asking');
+  }
+
+  function acceptConsent() {
+    const img = asking;
+    consented = true;
+    try {
+      chrome.storage.local.set({ consented: true }).catch(() => {});
+    } catch {}
+    if (img?.isConnected) {
+      endAsking();
+      openFrom(img);
+    } else {
+      declineConsent();
+    }
+  }
+
+  function declineConsent() {
+    endAsking();
+    ui.root.classList.remove('open');
+    ui.host.style.display = 'none';
+    unlockScroll();
+    if (opener?.isConnected && opener !== document.body) opener.focus({ preventScroll: true });
+    opener = null;
+  }
+
+  try {
+    chrome.storage.local.get('consented').then((r) => (consented ||= !!r.consented), () => {});
+  } catch {}
+
   window.addEventListener('click', onClick, true);
   window.addEventListener('keydown', onKeyDown, true);
   // Navigating away (back button, Turbo/PJAX links) closes the viewer.
+  let navigations = 0;
+  const leave = () => {
+    navigations++;
+    if (asking) declineConsent();
+    else if (isOpen) close();
+  };
   for (const evt of ['popstate', 'turbo:visit', 'pjax:start']) {
-    window.addEventListener(evt, () => isOpen && close());
-    document.addEventListener(evt, () => isOpen && close());
+    window.addEventListener(evt, leave);
+    document.addEventListener(evt, leave);
   }
 })();

@@ -6,7 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
-export const EXTENSION = path.join(ROOT, 'extension');
+/** Set EXTENSION_PATH to test another copy, e.g. the unzipped store package. */
+export const EXTENSION = process.env.EXTENSION_PATH || path.join(ROOT, 'extension');
 export const FIXTURES = path.join(ROOT, 'tests', 'fixtures');
 export const OUTPUT = path.join(ROOT, 'tests', 'output');
 export const IS_MAC = process.platform === 'darwin';
@@ -65,7 +66,7 @@ export function viewer(page) {
   return {
     host,
     q,
-    text: (sel) => q(sel).textContent(),
+    text: (sel) => q(sel).textContent({ timeout: 2000 }).catch(() => null),
     zoom: async () => parseInt(await q('.zoom').textContent(), 10),
     imageRect: () => q('.img').evaluate((el) => {
       const r = el.getBoundingClientRect();
@@ -74,3 +75,6 @@ export function viewer(page) {
     isOpen: () => host.isVisible(),
   };
 }
+
+/** Record the one-time consent the viewer asks for, as if the user had clicked Continue. */
+export const acceptConsent = (sw) => sw.evaluate(() => chrome.storage.local.set({ consented: true }));

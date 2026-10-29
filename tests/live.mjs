@@ -3,7 +3,7 @@
 //   npm run test:live [-- <issue or PR URL>]
 import fs from 'node:fs';
 import path from 'node:path';
-import { OUTPUT, MOD, launchWithExtension, extensionWorker, reporter, viewer } from './lib.mjs';
+import { OUTPUT, MOD, launchWithExtension, extensionWorker, acceptConsent, reporter, viewer } from './lib.mjs';
 
 const url = process.argv[2] || 'https://github.com/microsoft/vscode/issues/344285';
 const shots = path.join(OUTPUT, 'live');
@@ -12,6 +12,7 @@ fs.mkdirSync(shots, { recursive: true });
 
 const ctx = await launchWithExtension({ headless: !!process.env.HEADLESS, viewport: { width: 1440, height: 860 }, args: ['--window-size=1440,960'] });
 const sw = await extensionWorker(ctx);
+await acceptConsent(sw);
 const extPage = await ctx.newPage(); // for reading chrome.downloads
 await extPage.goto(`chrome-extension://${new URL(sw.url()).host}/manifest.json`);
 const page = ctx.pages()[0];

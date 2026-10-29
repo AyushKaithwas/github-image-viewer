@@ -15,8 +15,13 @@ fs.mkdirSync(path.join(profile, 'Default'));
 fs.writeFileSync(path.join(profile, 'Default/Preferences'), JSON.stringify({ download: { default_directory: downloads, prompt_for_download: false } }));
 
 // Serves a PNG at any path, including extensionless ones like GitHub's /user-attachments/assets/<id>.
+// /disguised claims to be an .exe.
 const png = fs.readFileSync(path.join(FIXTURES, 'assets', 'b.png'));
-const server = http.createServer((_, res) => res.writeHead(200, { 'content-type': 'image/png' }).end(png)).listen(0);
+const server = http.createServer((req, res) => {
+  const headers = { 'content-type': 'image/png' };
+  if (req.url === '/disguised') headers['content-disposition'] = 'attachment; filename="payload.exe"';
+  res.writeHead(200, headers).end(png);
+}).listen(0);
 const base = `http://127.0.0.1:${server.address().port}`;
 
 const port = 9300 + Math.floor(Math.random() * 500);
@@ -50,17 +55,25 @@ await evaluate(`Promise.all([
   download({ url: '${base}/user-attachments/assets/2222-bbbb', name: '2222-bbbb' }),
   download({ url: '${base}/shots/1.png?jwt=1', name: '01 Before', folder: '${folder}' }),
   download({ url: '${base}/shots/2', name: '02 After', folder: '${folder}' }),
+  download({ url: '${base}/disguised', name: 'disguised' }),
+  download({ url: '${base}/shots/screen.v2', name: 'versioned' }),
 ])`);
-await sleep(2500);
-
-const files = (function list(dir, pre = '') {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? list(path.join(dir, d.name), `${pre}${d.name}/`) : [`${pre}${d.name}`]));
-})(downloads);
+const list = (dir, pre = '') =>
+  fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? list(path.join(dir, d.name), `${pre}${d.name}/`) : [`${pre}${d.name}`]));
+// Wait (up to 15s) until all five downloads have finished; Chrome writes .crdownload files until then.
+let files = [];
+for (let i = 0; i < 60; i++) {
+  await sleep(250);
+  files = list(downloads);
+  if (files.length >= 5 && !files.some((f) => f.endsWith('.crdownload'))) break;
+}
 
 const { check, finish } = reporter('Download naming');
 check('extensionless URL gets its real extension', files.includes('2222-bbbb.png'), files.join(', '));
 check('"download all" saves into a per-page folder', files.includes(`${folder}/01 Before.png`), files.join(', '));
 check('file type is taken from the response when the URL has none', files.includes(`${folder}/02 After.png`), files.join(', '));
+check('a server-suggested non-image extension is ignored', files.includes('disguised.png') && !files.some((f) => f.endsWith('.exe')), files.join(', '));
+check('an unknown URL suffix loses to the image type', files.includes('versioned.png'), files.join(', '));
 
 ws.close();
 chrome.kill();

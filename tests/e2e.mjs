@@ -19,9 +19,17 @@ const imageFor = (url) => {
   const key = url.match(/(aaa|bbb|ccc|ddd|portrait|hidden|badge)/)?.[1];
   return fs.readFileSync(path.join(assets, `${{ aaa: 'a', bbb: 'b', ccc: 'c', ddd: 'd' }[key] || key}.png`));
 };
+const README_URL = 'https://github.com/octo-org/octo-app/blob/main/README.md';
+const RAW = { 'shot.png': 'b.png', 'thumb.png': 'hidden.png', 'full.png': 'a.png' };
+const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400"><rect width="600" height="400" fill="#4493f8"/></svg>';
 await ctx.route('**/*', (route) => {
   const url = route.request().url();
+  const raw = url.match(/\/raw\/main\/docs\/(?:assets\/)?([\w.]+)/)?.[1];
+  if (raw === 'diagram.svg') return route.fulfill({ contentType: 'image/svg+xml', body: SVG });
+  if (raw) return RAW[raw] ? route.fulfill({ contentType: 'image/png', body: fs.readFileSync(path.join(assets, RAW[raw])) }) : route.fulfill({ status: 404, body: '' });
+  if (url === README_URL) return route.fulfill({ contentType: 'text/html', body: fs.readFileSync(path.join(FIXTURES, 'readme.html')) });
   if (url.startsWith('https://github.com/octo-org/')) return route.fulfill({ contentType: 'text/html', body: fs.readFileSync(path.join(FIXTURES, 'pr.html')) });
+  if (url.includes('objects.githubusercontent.com')) return route.fulfill({ contentType: 'image/png', body: fs.readFileSync(path.join(assets, 'a.png')) });
   if (/githubusercontent\.com|shields\.io|user-attachments/.test(url)) return route.fulfill({ contentType: 'image/png', body: imageFor(url) });
   return route.fulfill({ status: 404, body: '' });
 });
@@ -52,9 +60,30 @@ await page.click('img[alt="build"]').catch(() => {});
 check('badge links keep their normal behaviour', !(await v.host.count()) || !(await v.isOpen()));
 if (page.url() !== PR_URL) await page.goBack();
 
+// --- One-time consent ---
+await page.click('#first');
+await settle(300);
+check('the first click asks for consent before reading the page', (await v.q('.consent').isVisible()) && (await v.q('.thumb').count()) === 0);
+const focused = [];
+for (let i = 0; i < 3; i++) {
+  await page.keyboard.press('Tab');
+  focused.push(await page.evaluate(() => document.activeElement?.shadowRoot?.activeElement?.textContent.trim()));
+}
+check('Tab reaches the privacy policy link and both buttons', ['Privacy policy', 'Not now', 'Continue'].every((t) => focused.includes(t)), focused.join(' | '));
+await page.keyboard.press('Escape');
+await settle(300);
+check('"Not now" (Esc) closes without opening or remembering', !(await v.isOpen()) && !(await sw.evaluate(() => chrome.storage.local.get('consented'))).consented);
+await page.click('#first');
+await settle(300);
+await v.q('[data-action="consentYes"]').click();
+await settle(450);
+check('Continue opens the clicked image and is remembered', (await counter()) === '1 / 5' && (await sw.evaluate(() => chrome.storage.local.get('consented'))).consented === true);
+
+await page.keyboard.press('Escape');
+await settle(450);
 await page.click('#first');
 await settle(450);
-check('clicking an image opens the viewer', await v.isOpen());
+check('clicking an image opens the viewer, without asking again', (await v.isOpen()) && !(await v.q('.consent').isVisible()));
 check('gallery has the 5 visible images (badge and collapsed image skipped)', (await counter()) === '1 / 5', await counter());
 check('caption comes from the table header', (await caption()) === 'Before', await caption());
 check('author and natural size are shown', (await v.text('.sub')) === '@octocat · 2400 × 1500', await v.text('.sub'));
@@ -142,13 +171,18 @@ check('dragging at fit swipes to the next image', (await counter()) === '2 / 5')
 await page.keyboard.press('r');
 await settle();
 check('R rotates', (await v.q('.img').evaluate((el) => el.style.transform)).includes('rotate(90deg)'));
+await v.q('[data-action="rotate"]').focus();
 await page.keyboard.press('?');
 check('? opens shortcut help', await v.q('.help').isVisible());
+await page.keyboard.press('Enter');
+await page.keyboard.press('Space');
+check('keys under the help overlay do nothing', (await v.q('.img').evaluate((el) => el.style.transform)).includes('rotate(90deg)') && (await v.q('.help').isVisible()) && (await counter()) === '2 / 5');
 const help = await v.text('.help-card');
 check('help shows this platform’s keys', IS_MAC ? help.includes('⌘←') && !help.includes('Home') : help.includes('Home') && help.includes('Ctrl'));
 await page.screenshot({ path: path.join(shots, 'help.png') });
 await page.keyboard.press('Escape');
 check('Esc closes help first, viewer stays open', !(await v.q('.help').isVisible()) && (await v.isOpen()));
+check('closing help returns focus to where it was', await page.evaluate(() => document.activeElement?.shadowRoot?.activeElement?.dataset.action === 'rotate'));
 
 // --- Copy ---
 await page.keyboard.press('l');
@@ -173,6 +207,13 @@ check('⇧D names files after captions, in a per-page folder',
   JSON.stringify(all.items.map((i) => i.name)) === JSON.stringify(['1 Before', '2 After', '3 Empty state', '4 Loading state', '5 Mobile layout']),
   JSON.stringify(all?.items.map((i) => i.name)));
 
+// --- The service worker only acts on addresses it should ---
+const ask = (msg) => extPage.evaluate((m) => chrome.runtime.sendMessage(m), msg);
+const offHost = await ask({ type: 'giv:fetch', urls: ['https://example.com/a.png'] });
+check('the worker refuses to fetch from non-GitHub hosts', offHost?.ok === false, JSON.stringify(offHost));
+const insecure = await ask({ type: 'giv:download', url: 'http://example.com/a.png', name: 'a' });
+check('the worker refuses plain-http downloads', insecure?.ok === false, JSON.stringify(insecure));
+
 // --- Closing ---
 await page.keyboard.press('Escape');
 await settle(450);
@@ -187,6 +228,73 @@ check('opening on a later image starts there', (await counter()) === '5 / 5');
 await page.mouse.click(150, 450);
 await settle(450);
 check('clicking the backdrop closes', !(await v.isOpen()));
+
+// --- README page: linked originals, SVG, broken images, keyboard and focus ---
+await page.goto(README_URL);
+await page.waitForFunction(() => [...document.images].every((i) => i.complete));
+await page.focus('a:has(#plain)');
+await page.keyboard.press('Enter');
+await settle(450);
+check('Enter on an image link opens the viewer', (await v.isOpen()) && (await counter()) === '1 / 7', await counter());
+if (!(await v.isOpen())) {
+  await page.bringToFront();
+  await page.click('#plain');
+  await settle(450);
+}
+check('README image shows the file itself, not its /blob/ page', (await v.q('.img').getAttribute('src')).endsWith('/raw/main/docs/shot.png'));
+for (let i = 0; i < 25; i++) await page.keyboard.press('Tab');
+const inside = () => page.evaluate(() => document.activeElement?.id === 'github-image-viewer');
+check('Tab stays inside the viewer', await inside());
+for (let i = 0; i < 5; i++) await page.keyboard.press('Shift+Tab');
+check('Shift+Tab stays inside the viewer', await inside());
+await page.keyboard.press('Escape');
+await settle(450);
+check('closing gives focus back to the image link', await page.evaluate(() => document.activeElement === document.querySelector('a:has(#plain)')));
+
+await page.click('#thumb');
+await settle(600);
+check('a thumbnail opens its linked full-size image (even from an assets/ folder)', (await v.text('.sub')) === '2400 × 1500', await v.text('.sub'));
+await page.keyboard.press('ArrowRight');
+await settle(400);
+await page.evaluate(() => navigator.clipboard.writeText('stale'));
+await page.keyboard.press('c');
+await settle(1500);
+const svgTypes = await page.evaluate(async () => (await navigator.clipboard.read()).flatMap((i) => i.types)).catch((e) => [String(e)]);
+check('C copies an SVG as PNG', (await caption()) === 'Architecture' && svgTypes.includes('image/png'), `${await v.text('.toast')} ${svgTypes.join()}`);
+await page.keyboard.press('ArrowRight');
+await settle(600);
+check('a broken image shows the error state', await v.q('.error').isVisible());
+const original = ctx.waitForEvent('page', { timeout: 3000 }).catch(() => null);
+await v.q('.error button').click();
+check('"Open original" in the error state opens the image and keeps the viewer open', !!(await original) && (await v.isOpen()));
+await page.bringToFront();
+await page.keyboard.press('ArrowRight');
+await settle(600);
+check('a missing full-size original falls back to the thumbnail', (await v.text('.sub')) === '400 × 300', await v.text('.sub'));
+await page.evaluate(() => navigator.clipboard.writeText('stale'));
+await page.keyboard.press('c');
+await settle(1500);
+const fbTypes = await page.evaluate(async () => (await navigator.clipboard.read()).flatMap((i) => i.types)).catch((e) => [String(e)]);
+check('…and copying it copies the thumbnail', fbTypes.includes('image/png'), `${await v.text('.toast')} ${fbTypes.join()}`);
+
+await page.setViewportSize({ width: 800, height: 420 });
+await page.keyboard.press('?');
+await page.mouse.move(400, 210);
+await page.mouse.wheel(0, 400);
+await settle(300);
+check('the shortcut list scrolls on a short window', (await v.q('.help-card').evaluate((el) => el.scrollTop)) > 0);
+await page.keyboard.press('Escape');
+await page.keyboard.press('Escape');
+await settle(450);
+await page.setViewportSize({ width: 1440, height: 900 });
+const textTab = ctx.waitForEvent('page', { timeout: 3000 }).catch(() => null);
+await page.click('#textlink', { position: { x: 150, y: 10 } });
+check('clicking the text of a link that also holds an image still follows the link', !!(await textTab) && !(await v.isOpen()));
+await page.bringToFront();
+await page.click('#offhost');
+await settle(600);
+check('an original on a host the extension can\'t copy from is not shown instead of the image', (await v.text('.sub')) === '400 × 300', await v.text('.sub'));
+await page.keyboard.press('Escape');
 
 await ctx.close();
 process.exit(finish());

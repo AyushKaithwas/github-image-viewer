@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="extension/icons/icon128.png" width="88" alt="">
+  <img src="extension/icons/icon128.png" width="116" alt="">
 </p>
 
-<h1 align="center">GitHub Image Viewer</h1>
+<h1 align="center">Image Viewer for GitHub</h1>
 
 <p align="center">
   <b>Click a screenshot in a pull request. Stay on the page.</b><br>
@@ -26,7 +26,7 @@ GitHub opens every image in a new tab. Reviewing a pull request with twenty scre
 
 ## Features
 
-- **Browse the whole page.** Every image in the PR or issue, in page order, with a thumbnail strip, arrow keys, buttons, and swipe or two-finger trackpad gestures.
+- **Browse the whole page.** Every image in the PR or issue, in page order, with a thumbnail strip, arrow keys, buttons, and swipe or two-finger trackpad gestures. When a README thumbnail links to a full-size file, the viewer shows the full-size one.
 - **Zoom where you click.** Click a spot to zoom into it, scroll or pinch for fine control, drag to pan. Text in screenshots stays sharp at any zoom level.
 - **Know what you're looking at.** Captions come from the table heading above the screenshot (the usual `Before | After` layout), a label row, or alt text. The comment author and the image's real pixel size are shown alongside.
 - **Copy and save.** Copy the image to the clipboard as PNG, copy its link, or download it at full size with the right file extension. *Download all* saves every image into a folder named after the PR, numbered and named after their captions.
@@ -79,11 +79,11 @@ Other Chromium browsers (Edge, Brave, Arc) can load it the same way. Tested in C
 ## How it works
 
 ```mermaid
-flowchart LR
-    click["Click on an image<br/>in .markdown-body"] --> content["content.js<br/>collects the gallery,<br/>captions and authors"]
-    content --> viewer["Viewer UI<br/>(shadow DOM)"]
-    viewer -- "download / copy" --> worker["background.js<br/>service worker"]
-    worker -- "chrome.downloads" --> disk[("Downloads/<br/>GitHub images/…")]
+flowchart TB
+    click["Click on an image in .markdown-body"] --> content["content.js collects the gallery, captions and authors"]
+    content --> viewer["Viewer UI (shadow DOM)"]
+    viewer -- "download / copy" --> worker["background.js service worker"]
+    worker -- "chrome.downloads" --> disk[("Downloads/GitHub images/…")]
     worker -- "fetch" --> hosts["GitHub image hosts"]
 ```
 
@@ -98,28 +98,30 @@ The whole extension is two plain JavaScript files with no build step and no depe
 
 ## Privacy
 
-No analytics, no tracking, no remote code. The only network requests it makes are to GitHub's own image hosts, and only when you copy or download an image.
+Everything happens in your browser, and the first time you click an image the viewer explains what it reads and asks you to agree. The developer receives no data, and there are no analytics, tracking or remote code. The only requests the extension makes are for the images themselves: the ones already on the page, the full-size file when a thumbnail links to one on GitHub, and the image's file when you copy or download it. The full [privacy policy](PRIVACY.md) has the details.
 
 | Permission | Why |
 | --- | --- |
 | `downloads` | Save images with sensible names and folders |
-| `github.com`, `gist.github.com` | Run the viewer on GitHub pages |
-| `*.githubusercontent.com` | Fetch image bytes for **Copy image** |
+| `storage` | Remember that you agreed to the one-time privacy notice |
+| `github.com` | Run the viewer on GitHub pages, and fetch GitHub-hosted images for **Copy image** |
+| `raw`, `camo`, `private-user-images`, `user-images`, `media`, `gist` `.githubusercontent.com` | Fetch image bytes from GitHub's image servers for **Copy image** |
 
 ## Development
 
 ```bash
 npm install
-npm run setup        # downloads Playwright's Chromium
-npm test             # end-to-end + download naming tests (headless)
-npm run test:live    # visible Chrome against a real public GitHub issue
-npm run demo         # re-records docs/demo.gif and the screenshots (needs ffmpeg)
-npm run package      # zips extension/ for the Chrome Web Store
+npm run setup         # downloads Playwright's Chromium
+npm test              # end-to-end + download naming tests (headless)
+npm run test:live     # visible Chrome against a real public GitHub issue
+npm run demo          # re-records docs/demo.gif and the screenshots (needs ffmpeg)
+npm run package       # zips extension/ for the Chrome Web Store
+npm run store-assets  # renders the store's promo images into store/
 ```
 
 The tests load the real extension into Chromium and drive it with mouse and keyboard input:
 
-- **`tests/e2e.mjs`** serves a copy of GitHub's PR markup at `github.com` and checks 42 behaviours, from captions and zoom anchoring to clipboard contents and download requests.
+- **`tests/e2e.mjs`** serves copies of GitHub's PR and README markup at `github.com` and checks 64 behaviours, from captions and zoom anchoring to keyboard focus, clipboard contents and download requests.
 - **`tests/downloads.mjs`** launches Chromium without automation owning downloads, to check the files really land on disk with the right names and extensions.
 - **`tests/live.mjs`** runs the same kind of checks on a real GitHub issue.
 
@@ -140,3 +142,5 @@ If you'd rather use a userscript, [GitHub Image Lightbox](https://greasyfork.org
 ## License
 
 [MIT](LICENSE) © Ayush Kaithwas
+
+Image Viewer for GitHub is an independent project, not affiliated with or endorsed by GitHub, Inc.

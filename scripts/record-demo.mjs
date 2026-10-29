@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, MOD, launchWithExtension, extensionWorker, tempDir, viewer } from '../tests/lib.mjs';
+import { ROOT, MOD, launchWithExtension, extensionWorker, acceptConsent, tempDir, viewer } from '../tests/lib.mjs';
 
 const url = process.argv[2] || 'https://github.com/microsoft/vscode/issues/344285';
 const docs = path.join(ROOT, 'docs');
@@ -11,7 +11,7 @@ const videoDir = tempDir('giv-video-');
 const size = { width: 1280, height: 800 };
 
 const ctx = await launchWithExtension({ viewport: size, recordVideo: { dir: videoDir, size } });
-await extensionWorker(ctx);
+await acceptConsent(await extensionWorker(ctx));
 const page = ctx.pages()[0];
 const v = viewer(page);
 
